@@ -209,14 +209,26 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build &
 
 `docker/Dockerfile.static` builds on Alpine with `-static` (musl). `docker/Dockerfile.rhel8`
 builds on Rocky Linux 8 with `gcc-toolset-13`, links libstdc++/libgcc statically and asserts the
-result needs no glibc symbol newer than 2.28. Building arm64 on an x86_64 runner goes through
-QEMU (`docker/setup-qemu-action`); switch the arm64 matrix entry to an `ubuntu-24.04-arm` runner
-if your plan has one and you want it faster.
+result needs no glibc symbol newer than 2.28.
 
 ## Releasing
 
-`.github/workflows/ci.yml` builds and tests every push and PR (static amd64 + arm64, rhel8).
-`.github/workflows/release.yml` runs on a `v*` tag:
+**First time only** — put the project on GitHub and point the deploy files at it:
+
+```sh
+git init && git add -A && git commit -m "podlogs"
+gh repo create your-org/podlogs --private --source . --push     # or create it in the UI and git push
+sed -i 's/OWNER/your-org/g' deploy/compose.yaml deploy/quadlet/podlogs.container deploy/systemd/podlogs.service
+git commit -am "point deploy files at your-org" && git push
+```
+
+Nothing else to configure: the workflows use the default `GITHUB_TOKEN` (`contents: write` for
+the release, `packages: write` for GHCR are set in the workflow file). If the repo is private,
+the GHCR image is private too — `podman login ghcr.io` with a token that has `read:packages`
+on the hosts that pull it, or use the tarballs.
+
+**Every release** — `.github/workflows/ci.yml` builds and tests every push and PR
+(static amd64 + arm64, rhel8); `.github/workflows/release.yml` runs on a `v*` tag:
 
 ```sh
 git tag v1.0.0
@@ -226,9 +238,10 @@ git push origin v1.0.0
 It builds all three targets in their containers, packages each as
 `podlogs-v1.0.0-<target>.tar.gz` (binary, `podlogs.json`, systemd units, quadlet, README),
 writes `SHA256SUMS`, creates the GitHub release with auto-generated notes and the assets attached,
-and pushes `ghcr.io/<owner>/<repo>:v1.0.0`, `:1.0`, `:latest` (multi-arch). It needs only the
-default `GITHUB_TOKEN` (`contents: write`, `packages: write` are set in the workflow). Replace the
-`OWNER` placeholders in `deploy/` with your GitHub org once the repo exists.
+and pushes `ghcr.io/your-org/podlogs:v1.0.0`, `:1.0`, `:latest` (multi-arch). The release
+appears at `https://github.com/your-org/podlogs/releases/tag/v1.0.0` about 15 minutes after the
+push (the arm64 build runs under QEMU; switch its matrix entry to an `ubuntu-24.04-arm` runner if
+your plan has one and you want it faster).
 
 ## Limitations
 
