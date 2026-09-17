@@ -1,0 +1,49 @@
+# syntax=docker/dockerfile:1
+#
+# Fully static musl build. Used for the linux/amd64 and linux/arm64 release
+# binaries (they run on any Linux, regardless of glibc version) and for the
+# container image.
+#
+#   docker buildx build -f docker/Dockerfile.static --platform linux/arm64 \
+#     --target artifact --output type=local,dest=out .
+#
+ARG ALPINE_VERSION=3.22
+FROM alpine:${ALPINE_VERSION} AS build
+RUN apk add --no-cache build-base cmake ninja binutils file
+
+WORKDIR /src
+COPY CMakeLists.txt ./
+COPY third_party ./third_party
+COPY src ./src
+COPY tests ./tests
+
+ARG VERSION=dev
+ARG RUN_TESTS=1
+RUN cmake -S . -B build -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DPODLOGS_STATIC=ON \
+      -DPODLOGS_VERSION="${VERSION}" \
+ && cmake --build build \
+ && if [ "${RUN_TESTS}" = "1" ]; then ./build/podlogs_tests; fi \
+ && strip build/podlogs \
+ && file build/podlogs \
+ && ./build/podlogs --version
+
+# Bare binary, for `--target artifact --output type=local,dest=out`.
+FROM scratch AS artifact
+COPY --from=build /src/build/podlogs /podlogs
+
+# Runtime image: mount the podman socket, point PODLOGS_LOKI_URL at Loki.
+FROM alpine:${ALPINE_VERSION} AS runtime
+RUN addgroup -S podlogs && adduser -S -G podlogs -h /var/lib/podlogs podlogs \
+ && mkdir -p /etc/podlogs /var/lib/podlogs && chown podlogs:podlogs /var/lib/podlogs
+COPY --from=build /src/build/podlogs /usr/local/bin/podlogs
+COPY deploy/podlogs.json /etc/podlogs/podlogs.json
+ENV PODLOGS_LOKI_URL=http://loki:3100 \
+    PODLOGS_METRICS_LISTEN=0.0.0.0:9151
+VOLUME /var/lib/podlogs
+EXPOSE 9151
+# Runs as root by default: the podman socket is normally root-owned. Pass
+# --user to podman/docker if your socket is readable by another uid.
+ENTRYPOINT ["/usr/local/bin/podlogs"]
+CMD ["--config", "/etc/podlogs/podlogs.json"]

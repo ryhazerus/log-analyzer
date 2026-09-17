@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["v*"]
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: build + test (static, ${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: arm64
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+        if: matrix.arch != 'amd64'
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and run tests inside the build container
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.static
+          target: artifact
+          platforms: ${{ matrix.platform }}
+          outputs: type=local,dest=out
+          build-args: |
+            VERSION=ci-${{ github.sha }}
+          cache-from: type=gha,scope=static-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=static-${{ matrix.arch }}
+
+      - name: Inspect binary
+        run: |
+          ls -la out
+          file out/podlogs
+
+  rhel8:
+    name: build + test (rhel8, x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.rhel8
+          target: artifact
+          platforms: linux/amd64
+          outputs: type=local,dest=out
+          build-args: |
+            VERSION=ci-${{ github.sha }}
+          cache-from: type=gha,scope=rhel8
+          cache-to: type=gha,mode=max,scope=rhel8
+      - run: file out/podlogs

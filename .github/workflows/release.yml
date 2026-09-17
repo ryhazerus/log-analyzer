@@ -1,0 +1,182 @@
+# Tag a commit `vX.Y.Z` and push it: this builds the release binaries inside
+# the Docker build containers, publishes them (plus SHA256SUMS) on the GitHub
+# release page, and pushes a multi-arch container image to GHCR.
+#
+#   git tag v1.0.0 && git push origin v1.0.0
+#
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (an existing tag, e.g. v1.0.0)"
+        required: true
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  VERSION: ${{ github.event.inputs.version || github.ref_name }}
+
+jobs:
+  static:
+    name: static ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: arm64
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.VERSION }}
+
+      - uses: docker/setup-qemu-action@v3
+        if: matrix.arch != 'amd64'
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build (fully static, musl) and run tests
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.static
+          target: artifact
+          platforms: ${{ matrix.platform }}
+          outputs: type=local,dest=out
+          build-args: |
+            VERSION=${{ env.VERSION }}
+          cache-from: type=gha,scope=static-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=static-${{ matrix.arch }}
+
+      - name: Package
+        run: |
+          file out/podlogs
+          scripts/package.sh out/podlogs linux-${{ matrix.arch }} "$VERSION"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: podlogs-linux-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  rhel8:
+    name: rhel8 x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.VERSION }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build on Rocky Linux 8 (glibc 2.28, gcc-toolset-13) and run tests
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.rhel8
+          target: artifact
+          platforms: linux/amd64
+          outputs: type=local,dest=out
+          build-args: |
+            VERSION=${{ env.VERSION }}
+          cache-from: type=gha,scope=rhel8
+          cache-to: type=gha,mode=max,scope=rhel8
+
+      - name: Package
+        run: |
+          file out/podlogs
+          scripts/package.sh out/podlogs rhel8-x86_64 "$VERSION"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: podlogs-rhel8-x86_64
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  image:
+    name: container image (ghcr.io)
+    runs-on: ubuntu-latest
+    needs: [static]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.VERSION }}
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.VERSION }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }}
+            type=raw,value=latest
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.static
+          target: runtime
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ env.VERSION }}
+          # Reuse the build stages already compiled by the `static` jobs.
+          cache-from: |
+            type=gha,scope=static-amd64
+            type=gha,scope=static-arm64
+
+  release:
+    name: publish release
+    runs-on: ubuntu-latest
+    needs: [static, rhel8, image]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: podlogs ${{ env.VERSION }}
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          body: |
+            | Asset | Runs on |
+            |---|---|
+            | `podlogs-${{ env.VERSION }}-linux-amd64.tar.gz` | any x86_64 Linux (fully static) |
+            | `podlogs-${{ env.VERSION }}-linux-arm64.tar.gz` | any aarch64 Linux (fully static) |
+            | `podlogs-${{ env.VERSION }}-rhel8-x86_64.tar.gz` | RHEL 8 / Rocky 8 / Alma 8 (built with gcc-toolset-13 against glibc 2.28) |
+
+            Container image: `ghcr.io/${{ github.repository }}:${{ env.VERSION }}` (linux/amd64, linux/arm64)
+
+            Verify: `sha256sum -c SHA256SUMS --ignore-missing`

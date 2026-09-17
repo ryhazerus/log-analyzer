@@ -1,0 +1,74 @@
+# Loki + Grafana + podlogs. Works with `podman compose` / podman-compose and
+# docker compose. Run from the deploy/ directory:
+#
+#   podman compose up -d
+#   open http://localhost:3000   (admin / admin, or GRAFANA_ADMIN_PASSWORD)
+#
+# Rootless podman: export PODMAN_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
+# and make sure `systemctl --user enable --now podman.socket` has been run.
+# Rootful: `systemctl enable --now podman.socket` (default socket path below).
+
+services:
+  loki:
+    image: docker.io/grafana/loki:3.7.7
+    container_name: loki
+    command: -config.file=/etc/loki/loki.yaml
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - ./loki/loki-config.yaml:/etc/loki/loki.yaml:ro,z
+      - loki-data:/loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3100/ready | grep -q ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  grafana:
+    image: docker.io/grafana/grafana:13.2.2
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro,z
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      loki:
+        condition: service_healthy
+    restart: unless-stopped
+
+  podlogs:
+    image: ghcr.io/OWNER/podlogs:latest
+    container_name: podlogs
+    # Or build locally instead of pulling:
+    # build:
+    #   context: ..
+    #   dockerfile: docker/Dockerfile.static
+    #   target: runtime
+    environment:
+      PODLOGS_LOKI_URL: http://loki:3100
+      PODLOGS_HOSTNAME: ${PODLOGS_HOSTNAME:-podman-host}
+      PODLOGS_LOG_LEVEL: info
+    volumes:
+      - ${PODMAN_SOCKET:-/run/podman/podman.sock}:/run/podman/podman.sock
+      - podlogs-data:/var/lib/podlogs
+    security_opt:
+      - label=disable
+    ports:
+      - "127.0.0.1:9151:9151"
+    depends_on:
+      loki:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  loki-data:
+  grafana-data:
+  podlogs-data:

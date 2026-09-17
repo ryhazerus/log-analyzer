@@ -1,0 +1,28 @@
+# User unit for rootless podman (containers run by this user). Install as the
+# same user that runs the containers:
+#   mkdir -p ~/.local/bin ~/.config/podlogs ~/.config/systemd/user
+#   install -m 0755 podlogs ~/.local/bin/podlogs
+#   install -m 0644 podlogs.json ~/.config/podlogs/podlogs.json
+#   install -m 0644 podlogs-user.service ~/.config/systemd/user/podlogs.service
+#   systemctl --user enable --now podman.socket
+#   systemctl --user daemon-reload && systemctl --user enable --now podlogs
+#   loginctl enable-linger $USER      # keep it running without a login session
+[Unit]
+Description=podlogs - ship podman container logs to Loki (rootless)
+After=podman.socket
+Wants=podman.socket
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/podlogs --config %h/.config/podlogs/podlogs.json
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+# %S = $XDG_STATE_HOME (~/.local/state) for user units
+StateDirectory=podlogs
+Environment=PODLOGS_CHECKPOINT_PATH=%S/podlogs/checkpoint.json
+Environment=PODLOGS_PODMAN_SOCKET=%t/podman/podman.sock
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

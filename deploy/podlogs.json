@@ -1,0 +1,109 @@
+{
+  // podlogs configuration. Comments are allowed. Every key is optional;
+  // omitted keys keep the defaults shown here. Durations accept "500ms",
+  // "30s", "5m", "1h". Environment variables PODLOGS_* override the file
+  // (see `podlogs --help`).
+
+  "log_level": "info",
+  // Value of the `host` label. Empty = gethostname(). Set PODLOGS_HOSTNAME
+  // when running in a container, otherwise you get the container id.
+  "hostname": "",
+  // Entries buffered in memory between the tailers and the Loki shipper. When
+  // full, tailers pause (podman keeps the logs on disk), so nothing is lost.
+  "queue_capacity": 50000,
+  // Prometheus metrics + /healthz. "" disables.
+  "metrics_listen": "127.0.0.1:9151",
+
+  "podman": {
+    // Path to the podman API socket. "" = auto-detect ($CONTAINER_HOST,
+    // /run/podman/podman.sock, $XDG_RUNTIME_DIR/podman/podman.sock).
+    "socket": "",
+    "api_prefix": "/v4.0.0/libpod",
+    "timeout": "10s",
+    // How often the running-container list is reconciled in addition to the
+    // podman events stream.
+    "resync_interval": "15s",
+    // Regexes matched against the container name and the image reference.
+    // Empty include = everything. Exclude wins.
+    "include": [],
+    "exclude": ["^podlogs"],
+    // Skip pod infra (pause) containers.
+    "skip_infra": true,
+    // For containers with no checkpoint yet (first start): "all" replays the
+    // whole log history, a duration replays only that much.
+    "initial_lookback": "1h"
+  },
+
+  "loki": {
+    "url": "http://127.0.0.1:3100",
+    "timeout": "15s",
+    // A batch is sent when it reaches batch_bytes / batch_entries or after
+    // batch_wait, whichever comes first.
+    "batch_wait": "1s",
+    "batch_bytes": 1048576,
+    "batch_entries": 5000,
+    // Transient failures (connection refused, 5xx, 429) are retried with
+    // backoff; -1 = forever, which turns a Loki outage into back-pressure
+    // instead of data loss. 4xx responses are never retried.
+    "max_retries": -1,
+    "backoff_max": "10s",
+    // Multi-tenant Loki: sets X-Scope-OrgID.
+    "tenant": "",
+    "basic_auth_user": "",
+    "basic_auth_pass": ""
+  },
+
+  "checkpoint": {
+    // Per-container "newest timestamp Loki acknowledged". Must be writable.
+    "path": "/var/lib/podlogs/checkpoint.json",
+    "interval": "5s"
+  },
+
+  "parse": {
+    // JSON keys tried in order for the level / logger. Dotted keys walk nested
+    // objects ("log.level" matches {"log":{"level":"info"}}).
+    "level_keys": ["level", "lvl", "severity", "log.level", "loglevel", "levelname", "@level", "level_name"],
+    "logger_keys": ["logger", "logger_name", "log.logger", "component"],
+    // Numeric levels: "pino" (10 trace .. 60 fatal) or "python" (10 debug .. 50 critical).
+    "numeric_levels": "pino",
+    // For non-JSON lines, look for INFO/WARN/ERROR/... in the first text_scan_bytes.
+    "detect_text_levels": true,
+    "text_scan_bytes": 256,
+    "multiline": {
+      // Join stack traces etc. to the line they belong to. A line is a
+      // continuation if it starts with whitespace or matches a pattern.
+      "enabled": true,
+      // Pending entries are flushed after this much silence.
+      "flush_timeout": "300ms",
+      "max_lines": 500,
+      "max_bytes": 262144,
+      // Added to the built-in patterns (Java, Python, Go, .NET traces).
+      "extra_patterns": []
+      // Or replace the built-in list entirely:
+      // "patterns": ["^at\\s+\\S", "^Caused by:"]
+    }
+  },
+
+  "labels": {
+    // Always attached as Loki stream labels.
+    "static": { "job": "podlogs" },
+    // Container fields that become stream labels (indexed; keep cardinality
+    // sane). Valid: host, container_name, container_id, image, image_name,
+    // image_tag, image_id, stream, pod.
+    "from_container": ["host", "container_name", "image_name", "image_tag", "image_id", "stream", "pod"],
+    // Container fields attached as structured metadata instead (not indexed,
+    // still filterable with `| container_id="..."`).
+    "as_metadata": ["container_id"],
+    // Container label -> Loki label, added when the container carries it.
+    "container_labels": {
+      "io.podman.compose.project": "compose_project",
+      "io.podman.compose.service": "compose_service",
+      "com.docker.compose.project": "compose_project",
+      "com.docker.compose.service": "compose_service"
+    },
+    // The detected level is always sent as `detected_level` structured
+    // metadata (Grafana colours lines by it). true additionally makes it a
+    // stream label so {level="error"} works; costs up to 6x more streams.
+    "level_as_label": false
+  }
+}

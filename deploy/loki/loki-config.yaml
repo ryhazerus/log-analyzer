@@ -1,0 +1,99 @@
+# Single-binary Loki on local disk, sized for a few to ~10 GB/day from a few
+# hundred containers. Retention is 14 days; adjust `retention_period`.
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+  grpc_server_max_recv_msg_size: 33554432
+  grpc_server_max_send_msg_size: 33554432
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /loki/tsdb-index
+    cache_location: /loki/tsdb-cache
+  filesystem:
+    directory: /loki/chunks
+
+limits_config:
+  # podlogs sends container_id / detected_level / logger as structured metadata.
+  allow_structured_metadata: true
+  retention_period: 336h
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  ingestion_rate_mb: 32
+  ingestion_burst_size_mb: 64
+  per_stream_rate_limit: 8MB
+  per_stream_rate_limit_burst: 32MB
+  max_line_size: 262144
+  max_line_size_truncate: true
+  max_label_names_per_series: 20
+  max_query_series: 5000
+  max_entries_limit_per_query: 10000
+  # Enables the volume API that Grafana's Logs Drilldown uses.
+  volume_enabled: true
+  # Loki derives a `service_name` label for Drilldown from the first of these
+  # labels a stream has; podlogs sets image_name and container_name.
+  discover_service_name: ["service", "app", "image_name", "container_name"]
+
+compactor:
+  working_directory: /loki/compactor
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 50
+  delete_request_store: filesystem
+
+ingester:
+  chunk_encoding: snappy
+  chunk_idle_period: 5m
+  chunk_target_size: 1572864
+  max_chunk_age: 2h
+  wal:
+    enabled: true
+    dir: /loki/wal
+
+querier:
+  max_concurrent: 8
+
+query_range:
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled: true
+        max_size_mb: 256
+
+pattern_ingester:
+  enabled: true
+
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /loki/rules
+
+analytics:
+  reporting_enabled: false

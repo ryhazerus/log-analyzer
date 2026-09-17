@@ -1,0 +1,2 @@
+#pragma once
+#define PODLOGS_VERSION "@PODLOGS_VERSION@"

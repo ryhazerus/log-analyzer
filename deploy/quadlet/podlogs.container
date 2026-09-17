@@ -1,0 +1,33 @@
+# Quadlet unit: runs the podlogs container image under systemd (podman >= 4.4).
+#   rootful:  install to /etc/containers/systemd/podlogs.container
+#             systemctl enable --now podman.socket
+#             systemctl daemon-reload && systemctl start podlogs
+#   rootless: install to ~/.config/containers/systemd/podlogs.container and
+#             change the socket Volume to %t/podman/podman.sock, then use
+#             systemctl --user for the commands above.
+[Unit]
+Description=podlogs - ship podman container logs to Loki
+After=podman.socket network-online.target
+Wants=podman.socket network-online.target
+
+[Container]
+Image=ghcr.io/OWNER/podlogs:latest
+ContainerName=podlogs
+Environment=PODLOGS_LOKI_URL=http://127.0.0.1:3100
+Environment=PODLOGS_HOSTNAME=%H
+Environment=PODLOGS_METRICS_LISTEN=127.0.0.1:9151
+Volume=/run/podman/podman.sock:/run/podman/podman.sock
+Volume=podlogs-data:/var/lib/podlogs
+# SELinux would otherwise block access to the socket.
+SecurityLabelDisable=true
+# Host networking so 127.0.0.1:3100 is the host's Loki.
+Network=host
+Ulimit=nofile=65536:65536
+
+[Service]
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target default.target

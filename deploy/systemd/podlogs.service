@@ -1,0 +1,33 @@
+# System-wide unit for rootful podman. Install:
+#   install -m 0755 podlogs /usr/local/bin/podlogs
+#   install -d /etc/podlogs && install -m 0644 podlogs.json /etc/podlogs/podlogs.json
+#   install -m 0644 podlogs.service /etc/systemd/system/podlogs.service
+#   systemctl enable --now podman.socket
+#   systemctl daemon-reload && systemctl enable --now podlogs
+[Unit]
+Description=podlogs - ship podman container logs to Loki
+Documentation=https://github.com/OWNER/podlogs
+After=network-online.target podman.socket
+Wants=network-online.target podman.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/podlogs --config /etc/podlogs/podlogs.json
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+# %S = /var/lib for system units
+StateDirectory=podlogs
+Environment=PODLOGS_CHECKPOINT_PATH=%S/podlogs/checkpoint.json
+LimitNOFILE=65536
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
